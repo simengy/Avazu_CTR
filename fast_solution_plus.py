@@ -44,7 +44,7 @@ class ftrl_proximal(object):
     '''
 
     def __init__(self, alpha, beta, L1, L2, D, 
-                 interaction=False, dropout = 1.0, sparse = False,
+                 interaction = False, dropout = 1.0, sparse = False,
                  dayfeature = True,
                  device_counters = False):
         # parameters
@@ -58,7 +58,8 @@ class ftrl_proximal(object):
         # feature related parameters
         self.D = D
         self.interaction = interaction
-        self.dropout = dropout        
+        self.dropout = dropout
+        self.sparse = sparse
 
         # model
         # n: squared sum of past gradients
@@ -111,7 +112,10 @@ class ftrl_proximal(object):
             
             if dropped != None and dropped[j]:
                 continue
-           
+          
+            if i not in w and self.sparse:
+                w[i] = 0
+
             wTx += w[i]
         
         if dropped != None: wTx /= dropout 
@@ -212,6 +216,7 @@ def data(f_train, D, dayfilter = None, dayfeature = True, counters = False):
     device_id_counter = {}
 
     for t, row in enumerate(DictReader(f_train)):
+
         # process id
         ID = row['id']
         del row['id']
@@ -259,6 +264,78 @@ def data(f_train, D, dayfilter = None, dayfeature = True, counters = False):
             index = abs(hash(key + '_' + value)) % D
             x.append(index)
 
+        # app, site, device interactions
+	app_col = ['app_id', 'app_domain', 'app_category']
+        site_col = ['site_id', 'site_domain', 'site_category']
+        device_col = ['device_id', 'device_ip', 'device_model', 'device_type', 'device_conn_type']
+
+        id_col = ['app_id', 'site_id', 'device_id']
+        domain_col = ['app_domain', 'site_domain', 'device_model']
+        category_col = ['app_category', 'site_category', 'device_type']
+	
+        size_col = ['C15', 'C16']
+	connSize_col = ['C15', 'C16', 'device_conn_type']
+        
+        resolution_col = ['C20', 'C21']
+	bannerRes_col = ['banner_pos', 'C20', 'C21']
+        sizeRes_col = ['C15', 'C16', 'C20', 'C21']
+
+	#app
+	index = abs(hash( row[app_col[0]] + '_x_' + row[app_col[1]] + '_x_' + row[app_col[2]] )) % D
+        x.append(index)
+        #site
+	index = abs(hash( row[site_col[0]] + '_x_' + row[site_col[1]] + '_x_' + row[site_col[2]] )) % D
+        x.append(index)
+	#device
+	index = abs(hash( row[device_col[0]] + '_x_' + row[device_col[1]] + '_x_' + row[device_col[2]] + '_x_' + row[device_col[3]] + '_x_' + row[device_col[4]])) % D
+        x.append(index)
+        
+	#id
+	index = abs(hash( row[id_col[0]] + '_x_' + row[id_col[1]] + '_x_' + row[id_col[2]] )) % D
+        x.append(index)
+	#domain
+	index = abs(hash( row[domain_col[0]] + '_x_' + row[domain_col[1]] + '_x_' + row[domain_col[2]] )) % D
+        x.append(index)
+	#category
+	index = abs(hash( row[category_col[0]] + '_x_' + row[category_col[1]] + '_x_' + row[category_col[2]] )) % D
+        x.append(index)
+        '''
+	#size
+	index = abs(hash( row[size_col[0]] + '_x_' + row[size_col[1]] )) % D
+        x.append(index)
+        '''
+        #connSize
+	index = abs(hash( row[connSize_col[0]] + '_x_' + row[connSize_col[1]] + '_x_' + row[connSize_col[2]] )) % D
+        x.append(index)
+        
+        #resolution
+	index = abs(hash( row[resolution_col[0]] + '_x_' + row[resolution_col[1]] )) % D
+        x.append(index)
+        '''
+        #bannerResSize
+	index = abs(hash( row[bannerRes_col[0]] + '_x_' + row[bannerRes_col[1]] + '_x_' + row[bannerRes_col[2]] )) % D
+        x.append(index)
+        #sizeResSize
+	index = abs(hash( row[sizeRes_col[0]] + '_x_' + row[sizeRes_col[1]] + '_x_' + row[sizeRes_col[2]] + '_x_' + row[sizeRes_col[3]] )) % D
+        x.append(index)
+        '''
+
+        '''
+        # pair-wise interactions
+        
+        all_col = app_col
+        all_col.extend(site_col)
+        all_col.extend(device_col)
+        
+        all_col = ['C1','C14','C15','C16','C17','C18','C19','C20','C21']
+        L = len(all_col)
+
+        for i in range(L):
+            for j in range(i+1, L):
+                index = abs(hash( row[all_col[i]] + '_x_' + row[all_col[j]] )) % D
+                x.append(index)
+
+        '''
         yield t, ID, x, y
 
 
@@ -319,14 +396,14 @@ Perform training and prediction based on FTRL Optimal algorithm, with dropout ad
 
 def write_learner(learner, model_save, args):
 
-   with gzip.open(model_save, "wb") as model_file:
+   with open(model_save, "wb") as model_file:
            dump((args, learner),
                 model_file)
 
 
 def load_learner(model_save):
     
-    with gzip.open(model_save, "rb") as model_file:
+    with open(model_save, "rb") as model_file:
         (p, learner) = load(model_file)
     
     return learner
@@ -423,7 +500,7 @@ def predict_learner(learner, test, predictions, dayfilter, args):
     if not hasattr(learner, "device_counters"):
         learner.device_counters = False
      
-    with gzip.open(predictions, 'wb') as outfile:
+    with open(predictions, 'wb') as outfile:
         outfile.write('id,click\n')
         for t, ID, x, y in data(f_test, D,
                                 dayfilter = dayfilter,
