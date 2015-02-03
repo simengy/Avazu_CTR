@@ -362,8 +362,9 @@ Perform training and prediction based on FTRL Optimal algorithm, with dropout ad
 \n
 """)
     parser.add_argument('action', type=str,
-                        help='action to perform: train   / predict')
+                        help='action to perform: train / validate / predict')
     parser.add_argument('-t', "--train", default = "/dev/stdin")
+    parser.add_argument("--validate", default = "/dev/stdin")
     parser.add_argument('--test', default = "/dev/stdin")
     parser.add_argument('-p', "--predictions", default = "/dev/stdout")
     parser.add_argument("-o", "--outmodel")
@@ -375,7 +376,7 @@ Perform training and prediction based on FTRL Optimal algorithm, with dropout ad
     parser.add_argument('--dropout', default = 0.8, type = float)
     parser.add_argument('--bits', default = 23, type = int)
     parser.add_argument('--n_epochs', default = 1, type = int)
-    parser.add_argument('--holdout', default = 100, type = int)
+    parser.add_argument('--holdout', default = None, type = int)
     parser.add_argument("--interactions", action = "store_true")
     parser.add_argument("--sparse", action = "store_true")
     parser.add_argument("-v", '--verbose', default = 3, type = int)
@@ -409,7 +410,10 @@ def load_learner(model_save):
     return learner
     
 
-def train_learner(train, dayfilter, args):
+def train_learner(train, validate, dayfilter, args):
+
+    full_date = ['141021', '141022', '141023', '141024', '141025', '141026', '141027', '141028', '141029', '141030']
+    daydiff = list(set(full_date) - set(dayfilter))
 
     if args.verbose > 1:
         stderr.write("Learning from %s\n" % train)
@@ -455,7 +459,7 @@ def train_learner(train, dayfilter, args):
             
            # step 1, get prediction from learner
             
-           if t % holdout == 0:
+           if holdout != None and t % holdout == 0:
                 # step 2-1, calculate holdout validation loss
                 #           we do not train with the holdout data so that our
                 #           validation loss is an accurate estimation of
@@ -466,7 +470,7 @@ def train_learner(train, dayfilter, args):
            else:
                # step 2-2, update learner with label (click) information
                learner.update(x, y)
-            
+           ''' 
            c += 1 
            if args.verbose > 2 and c >= next_report:
                stderr.write(' %s\tencountered: %d/%d\tcurrent logloss: %f\n' % (
@@ -479,11 +483,63 @@ def train_learner(train, dayfilter, args):
        else:
            stderr.write('Epoch %d finished, %d/%d samples per pass, suspicious holdout logloss: %f/%f, elapsed time: %s\n' % (
                   e, c, t, loss, count, str(datetime.now() - start)))
-
+           '''
+            
+       stderr.write('Epoch %d finished, %d/%d samples per pass, elapsed time: %s\n' % (e, c, t, str(datetime.now() - start)))
+        
+       validate_learner(learner, validate, daydiff, args)
+    
     f_train.close()
 
     return learner
+   
+
+
+def validate_learner(learner, test, dayfilter, args):
     
+    if args.verbose > 1:
+        stderr.write("Validation to days %s with model %s ...\n" % (str(dayfilter), str(learner)))        
+    
+    D = learner.D
+    loss = 0.
+    count = 0
+    next_report = 100000
+    c = 0
+    
+    if test[-3:] == ".gz":
+        f_test = gzip.open(test, "rb")
+    else:
+        f_test = open(test, "r")
+
+    start = datetime.now()
+    
+    if not hasattr(learner, "device_counters"):
+        learner.device_counters = False
+     
+    for t, ID, x, y in data(f_test, D,
+                            dayfilter = dayfilter,
+                            dayfeature = learner.dayfeature,
+                            counters = learner.device_counters):
+        p = learner.predict(x)
+
+        loss += logloss(p, y)
+        count += 1    
+        
+        c += 1 
+        if args.verbose > 2 and c >= next_report:
+            stderr.write(' %s\tencountered: %d/%d\tcurrent logloss: %f\n' % (
+                        datetime.now(), c, t, loss/count))
+            next_report *= 2
+
+    if count != 0:
+        stderr.write('%d/%d samples per pass, holdout logloss: %f, elapsed time: %s\n' % (
+            c, t, loss/count, str(datetime.now() - start)))
+    else:
+        stderr.write('%d/%d samples per pass, suspicious holdout logloss: %f/%f, elapsed time: %s\n' % (
+            c, t, loss, count, str(datetime.now() - start)))
+    
+    f_test.close()
+
 
 def predict_learner(learner, test, predictions, dayfilter, args):
     
@@ -526,10 +582,17 @@ def main_fast_dropout():
    
     if args.action in ["train", "train_predict"]:
         random.seed(1234)
-        learner = train_learner(args.train, dayfilter, args)
+        learner = train_learner(args.train, args.validate, dayfilter, args)
         if args.outmodel != None:
             write_learner(learner, args.outmodel, args)
             
+    if args.action in ["validate", "train_validate"]:
+        random.seed(1234)
+        if learner == None:
+            learner = load_learner(args.inmodel)
+        validate_learner(learner, args.test, dayfilter, args)
+    
+    
     if args.action in ["predict", "train_predict"]:
         random.seed(1234)
         if learner == None:
